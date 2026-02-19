@@ -8,6 +8,7 @@ type VoteStyleKey = "conservative" | "pressure" | "contrarian" | "logic_driven";
 export interface EnvVars {
   SILICONFLOW_API_KEY?: string;
   SILICONFLOW_MODEL?: string;
+  SILICONFLOW_GM_MODEL?: string;
   SILICONFLOW_BASE_URL?: string;
 }
 
@@ -282,6 +283,187 @@ function extractObservation(content: string): string | null {
   return null;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function dedupeSeatsInOrder(seats: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const seat of seats) {
+    if (isSeat(seat) && !seen.has(seat)) {
+      seen.add(seat);
+      ordered.push(seat);
+    }
+  }
+  return ordered;
+}
+
+function formatSeatList(seats: string[], emptyText: string): string {
+  return seats.length ? sortSeats(seats).join(", ") : emptyText;
+}
+
+function collectSeatsByKeywords(content: string, keywords: string[]): string[] {
+  if (!keywords.length) return [];
+
+  const escaped = keywords.map(escapeRegex);
+  const headPattern = new RegExp(`(?:${escaped.join("|")})[^\\n。；，]{0,18}?(Seat[1-8])`, "g");
+  const tailPattern = new RegExp(`(Seat[1-8])[^\\n。；，]{0,10}?(?:${escaped.join("|")})`, "g");
+
+  const hits: string[] = [];
+  for (const match of content.matchAll(headPattern)) {
+    if (match[1]) hits.push(match[1]);
+  }
+  for (const match of content.matchAll(tailPattern)) {
+    if (match[1]) hits.push(match[1]);
+  }
+  return dedupeSeatsInOrder(hits);
+}
+
+function extractPrimarySuspicionTarget(
+  playerName: string,
+  content: string,
+  alivePlayers: string[],
+): string | null {
+  const targets = collectSeatsByKeywords(content, [
+    "怀疑",
+    "可疑",
+    "像狼",
+    "是狼",
+    "狼面",
+    "嫌疑",
+    "优先投",
+    "先投",
+    "投给",
+    "投票给",
+    "票给",
+    "点名",
+    "警惕",
+  ]);
+
+  return targets.find((seat) => seat !== playerName && alivePlayers.includes(seat)) ?? null;
+}
+
+function extractSupportTargets(
+  playerName: string,
+  content: string,
+  alivePlayers: string[],
+): string[] {
+  const targets = collectSeatsByKeywords(content, ["支持", "认同", "同意", "信任", "站边", "保"]);
+  return targets.filter((seat) => {
+    if (seat === playerName || !alivePlayers.includes(seat)) {
+      return false;
+    }
+    const negativePattern = new RegExp(`不(?:太)?(?:支持|认同|同意|信任|站边|保)[^\\n。；，]{0,8}?${escapeRegex(seat)}`);
+    return !negativePattern.test(content);
+  });
+}
+
+function extractOpposeTargets(
+  playerName: string,
+  content: string,
+  alivePlayers: string[],
+  primarySuspicion: string | null,
+): string[] {
+  const explicit = collectSeatsByKeywords(content, [
+    "反对",
+    "质疑",
+    "不信",
+    "不认同",
+    "可疑",
+    "怀疑",
+    "嫌疑",
+    "狼面",
+    "踩",
+  ]);
+  const merged = primarySuspicion ? [primarySuspicion, ...explicit] : explicit;
+  return dedupeSeatsInOrder(merged).filter((seat) => seat !== playerName && alivePlayers.includes(seat));
+}
+
+function hasEvidenceSignals(content: string): boolean {
+  const hints = ["因为", "理由", "依据", "证据", "逻辑", "矛盾", "前后", "时间线", "行为", "动机"];
+  return hints.some((hint) => content.includes(hint));
+}
+
+function hasRhythmSignals(content: string): boolean {
+  const hints = ["带节奏", "跟风", "造势", "抱团", "拉票", "控票", "冲票", "节奏"];
+  return hints.some((hint) => content.includes(hint));
+}
+
+function normalizeSummaryText(summary: string): string {
+  const lines = summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*•\d一二三四五六七八九十\.\):：\s]+/, "").trim())
+    .filter(Boolean);
+
+  return lines.slice(0, 6).join("\n");
+}
+
+function buildFallbackDaySummary(
+  day: number,
+  speeches: Record<string, string>,
+  alivePlayers: string[],
+): string {
+  const aliveSorted = sortSeats(alivePlayers);
+  const suspicionPairs: string[] = [];
+  const supportPairs: string[] = [];
+  const opposePairs: string[] = [];
+  const evidencePlayers: string[] = [];
+  const rhythmPlayers: string[] = [];
+  const unclearPlayers: string[] = [];
+
+  for (const playerName of aliveSorted) {
+    const speech = asString(speeches[playerName], "").trim();
+    if (!speech || speech === "（发言失败）") {
+      unclearPlayers.push(playerName);
+      continue;
+    }
+
+    const primarySuspicion = extractPrimarySuspicionTarget(playerName, speech, aliveSorted);
+    if (primarySuspicion) {
+      suspicionPairs.push(`${playerName}->${primarySuspicion}`);
+    } else {
+      unclearPlayers.push(playerName);
+    }
+
+    const supportTargets = extractSupportTargets(playerName, speech, aliveSorted);
+    if (supportTargets.length) {
+      supportPairs.push(`${playerName}:${supportTargets.join("/")}`);
+    }
+
+    const opposeTargets = extractOpposeTargets(playerName, speech, aliveSorted, primarySuspicion);
+    if (opposeTargets.length) {
+      opposePairs.push(`${playerName}:${opposeTargets.join("/")}`);
+    }
+
+    if (hasEvidenceSignals(speech)) {
+      evidencePlayers.push(playerName);
+    }
+    if (hasRhythmSignals(speech)) {
+      rhythmPlayers.push(playerName);
+    }
+  }
+
+  const lines = [
+    `【规则保底摘要 Day ${day}】存活玩家 ${aliveSorted.length} 人。`,
+    `点名怀疑：${suspicionPairs.length ? suspicionPairs.join("；") : "无人明确点名"}`,
+    `明确支持：${supportPairs.length ? supportPairs.join("；") : "无人明确支持对象"}`,
+    `明确反对：${opposePairs.length ? opposePairs.join("；") : "无人明确反对对象"}`,
+    `提出理由/证据：${formatSeatList(dedupeSeatsInOrder(evidencePlayers), "无人明确给出")}`,
+    `质疑带节奏/跟风：${formatSeatList(dedupeSeatsInOrder(rhythmPlayers), "无人提及")}；观望或目标不明：${formatSeatList(dedupeSeatsInOrder(unclearPlayers), "无")}`,
+  ];
+
+  return lines.slice(0, 6).join("\n");
+}
+
 function normalizeSpeechText(text: string): string {
   return text.replace(/\s+/g, "");
 }
@@ -448,11 +630,18 @@ function requireModelEnv(env: EnvVars): { apiKey: string; model: string; baseURL
   };
 }
 
+interface ModelCallOptions {
+  temperature?: number;
+  timeoutMs?: number;
+  maxRetries?: number;
+}
+
 async function callJSONModel(
   client: OpenAI,
   model: string,
   systemMessage: string,
   task: string,
+  options: ModelCallOptions = {},
 ): Promise<Record<string, unknown>> {
   const base = {
     model,
@@ -460,18 +649,25 @@ async function callJSONModel(
       { role: "system" as const, content: systemMessage },
       { role: "user" as const, content: task },
     ],
-    temperature: 0.7,
+    temperature: options.temperature ?? 0.7,
+  };
+  const requestOptions = {
+    ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+    ...(options.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
   };
 
   let content = "";
   try {
-    const response = await client.chat.completions.create({
-      ...base,
-      response_format: { type: "json_object" },
-    });
+    const response = await client.chat.completions.create(
+      {
+        ...base,
+        response_format: { type: "json_object" },
+      },
+      requestOptions,
+    );
     content = asString(response.choices[0]?.message?.content, "");
   } catch {
-    const response = await client.chat.completions.create(base);
+    const response = await client.chat.completions.create(base, requestOptions);
     content = asString(response.choices[0]?.message?.content, "");
   }
 
@@ -496,8 +692,52 @@ async function getGmResponse(
   client: OpenAI,
   model: string,
   task: string,
+  options: ModelCallOptions = {},
 ): Promise<Record<string, unknown>> {
-  return callJSONModel(client, model, GAME_MASTER_SYSTEM_PROMPT, task);
+  return callJSONModel(client, model, GAME_MASTER_SYSTEM_PROMPT, task, options);
+}
+
+async function generateDaySummary(
+  state: GameState,
+  client: OpenAI,
+  gmModel: string,
+  speeches: Record<string, string>,
+): Promise<string> {
+  const fallbackSummary = buildFallbackDaySummary(state.currentDay, speeches, state.alivePlayers);
+  const gmTask = [
+    `请为第 ${state.currentDay} 天的发言生成投票摘要。`,
+    "以下是今天所有存活玩家的发言：",
+    JSON.stringify(speeches, null, 2),
+    "你必须只输出 JSON：{\"summary\":\"...\"}。",
+    "summary 必须仅包含事实，不表达立场，且最多 6 行。",
+    "每行尽量覆盖：点名怀疑对象、支持/反对对象、是否给出理由、是否质疑带节奏。",
+  ].join("\n");
+
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const gmResponse = await getGmResponse(client, gmModel, gmTask, {
+        temperature: 0.2,
+        timeoutMs: 15000,
+        maxRetries: 1,
+      });
+      const normalized = normalizeSummaryText(asString(gmResponse.summary, ""));
+      if (!normalized) {
+        throw new Error("summary 字段为空或无有效内容");
+      }
+      return normalized;
+    } catch (error) {
+      appendTimeline(state, `⚠️ GM 摘要第 ${attempt} 次尝试失败（模型：${gmModel}）：${String(error)}`);
+      if (attempt < maxAttempts) {
+        const delayMs = 300 * 2 ** (attempt - 1);
+        appendTimeline(state, `⏳ GM 摘要将在 ${delayMs}ms 后重试`);
+        await sleep(delayMs);
+      }
+    }
+  }
+
+  appendTimeline(state, "🛟 GM 摘要已降级为本地规则摘要");
+  return fallbackSummary;
 }
 
 async function runNightPhase(
@@ -588,6 +828,7 @@ async function runDayPhase(
   state: GameState,
   client: OpenAI,
   model: string,
+  gmModel: string,
 ): Promise<void> {
   appendTimeline(state, `\n${"=".repeat(70)}`);
   appendTimeline(state, `☀️ 第 ${state.currentDay} 天 - 白天`);
@@ -703,19 +944,7 @@ async function runDayPhase(
     }
   }
 
-  let daySummary = "（摘要生成失败，请基于现有信息判断）";
-  try {
-    const gmTask = [
-      `请为第 ${state.currentDay} 天的发言生成投票摘要。`,
-      "以下是今天所有存活玩家的发言：",
-      JSON.stringify(speeches, null, 2),
-      "请生成仅包含事实的摘要（<=6行），不要表达立场。",
-    ].join("\n");
-    const gmResponse = await getGmResponse(client, model, gmTask);
-    daySummary = asString(gmResponse.summary, daySummary);
-  } catch (error) {
-    appendTimeline(state, `⚠️ GM 摘要生成失败：${String(error)}`);
-  }
+  const daySummary = await generateDaySummary(state, client, gmModel, speeches);
 
   appendTimeline(state, `📋 GM摘要：\n${daySummary}`);
   appendTimeline(state, "");
@@ -1003,6 +1232,7 @@ export async function runOneStep(stateInput: GameState, env: EnvVars): Promise<G
   if (state.finished) return state;
 
   const { apiKey, model, baseURL } = requireModelEnv(env);
+  const gmModel = asString(env.SILICONFLOW_GM_MODEL, "").trim() || model;
   const client = new OpenAI({
     apiKey,
     baseURL,
@@ -1019,7 +1249,7 @@ export async function runOneStep(stateInput: GameState, env: EnvVars): Promise<G
       state.nextPhase = "day";
     }
   } else {
-    await runDayPhase(state, client, model);
+    await runDayPhase(state, client, model, gmModel);
     const winner = checkWinCondition(state);
     if (winner !== "none") {
       state.finished = true;

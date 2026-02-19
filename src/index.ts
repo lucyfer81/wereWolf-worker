@@ -38,6 +38,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
       now: new Date().toISOString(),
       hasApiKey: Boolean(env.SILICONFLOW_API_KEY),
       model: env.SILICONFLOW_MODEL ?? null,
+      gmModel: env.SILICONFLOW_GM_MODEL ?? env.SILICONFLOW_MODEL ?? null,
       baseUrl: env.SILICONFLOW_BASE_URL ?? null,
     });
   }
