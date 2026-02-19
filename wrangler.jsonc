@@ -1,0 +1,17 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "werewolf-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-02-18",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "SILICONFLOW_MODEL": "deepseek-ai/DeepSeek-V3.2",
+    "SILICONFLOW_BASE_URL": "https://api.siliconflow.cn/v1"
+  }
+}
