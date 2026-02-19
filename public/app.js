@@ -5,6 +5,7 @@ const ui = {
   newBtn: document.getElementById("new-game-btn"),
   stepBtn: document.getElementById("step-btn"),
   runBtn: document.getElementById("run-btn"),
+  exportLogBtn: document.getElementById("export-log-btn"),
   maxStepsInput: document.getElementById("max-steps-input"),
   statusList: document.getElementById("status-list"),
   aliveList: document.getElementById("alive-list"),
@@ -13,11 +14,17 @@ const ui = {
   eventsBody: document.getElementById("events-body"),
 };
 
+function updateExportLogButtonState() {
+  const hasTimeline = Boolean(currentState?.timeline?.length);
+  ui.exportLogBtn.disabled = busy || !hasTimeline;
+}
+
 function setBusy(nextBusy) {
   busy = nextBusy;
   [ui.newBtn, ui.stepBtn, ui.runBtn].forEach((btn) => {
     btn.disabled = busy;
   });
+  updateExportLogButtonState();
 }
 
 async function requestJson(path, payload) {
@@ -82,11 +89,68 @@ function renderTimeline() {
   if (!timeline.length) {
     ui.timeline.textContent = "暂无日志。";
     ui.timeline.classList.add("empty");
+    updateExportLogButtonState();
     return;
   }
   ui.timeline.textContent = timeline.join("\n");
   ui.timeline.classList.remove("empty");
   ui.timeline.scrollTop = ui.timeline.scrollHeight;
+  updateExportLogButtonState();
+}
+
+function buildExportFileName() {
+  const gameId = String(currentState?.id ?? "unknown")
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  const timestamp = new Date().toISOString().replace(/\.\d{3}Z$/, "Z").replace(/:/g, "-");
+  return `werewolf-log-${gameId || "unknown"}-${timestamp}.md`;
+}
+
+function buildTimelineMarkdown() {
+  const timelineLines = currentState?.timeline ?? [];
+  const timelineText = timelineLines.join("\n").replace(/```/g, "``\\`");
+  const alivePlayers = currentState?.alivePlayers?.length ? currentState.alivePlayers.join(", ") : "-";
+  const exportedAt = new Date().toISOString();
+
+  return [
+    "# AI 狼人杀运行日志",
+    "",
+    `- 导出时间: ${exportedAt}`,
+    `- Game ID: ${currentState?.id ?? "-"}`,
+    `- Day: ${currentState?.currentDay ?? "-"}`,
+    `- Next Phase: ${currentState?.nextPhase ?? "-"}`,
+    `- Finished: ${String(Boolean(currentState?.finished))}`,
+    `- Winner: ${currentState?.winner ?? "-"}`,
+    `- Alive Players: ${alivePlayers}`,
+    "",
+    "## 时间线日志",
+    "",
+    "```text",
+    timelineText || "暂无日志。",
+    "```",
+    "",
+  ].join("\n");
+}
+
+function exportTimelineAsMarkdown() {
+  const timeline = currentState?.timeline ?? [];
+  if (!timeline.length) {
+    alert("当前没有可导出的时间线日志。");
+    updateExportLogButtonState();
+    return;
+  }
+
+  const markdown = buildTimelineMarkdown();
+  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  const downloadUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = buildExportFileName();
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(downloadUrl);
 }
 
 function renderEvents() {
@@ -181,6 +245,10 @@ ui.stepBtn.addEventListener("click", () => {
 
 ui.runBtn.addEventListener("click", () => {
   runGameToEnd().catch((error) => alert(String(error)));
+});
+
+ui.exportLogBtn.addEventListener("click", () => {
+  exportTimelineAsMarkdown();
 });
 
 window.render_game_to_text = () => {

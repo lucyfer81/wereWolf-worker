@@ -29,3 +29,24 @@ Original prompt: 我要用openAI-SDK-JS来复刻~/PyProjects/agentRPG/ 目录下
 - 已完成：`npm run check` 通过（本轮改动后 TypeScript 无报错）。
 - TODO：如果需要自动化 UI 截图回归，安装 `playwright` 后补跑一次动作脚本。
 - TODO：对线上 `POST /api/game/step` 做一次真实模型回合验证（当前环境 DNS/直连受限，未能直接 curl 线上域名）。
+
+## 2026-02-19
+
+- 已完成：在“时间线日志”区块新增“导出 Markdown”按钮（`public/index.html`）。
+- 已完成：前端新增日志导出能力（`public/app.js`）：
+  - 从当前 `state.timeline` 生成 Markdown；
+  - 点击按钮后下载 `.md` 文件；
+  - 文件名包含 `gameId + 导出时间戳`；
+  - 无日志时按钮保持禁用并阻止导出空文件。
+- 已完成：补充日志区块标题行与导出按钮样式（`public/styles.css`）。
+- 已完成：`npm run check` 通过（TypeScript 无报错）。
+- 验证受限：
+  - Playwright 客户端仍不可用（缺少 `playwright` 包）。
+  - 本地 `wrangler dev` 在当前环境启动失败（`uv_interface_addresses returned Unknown system error 1`），因此未完成端到端 UI 点击验证。
+- 排查结论（wrangler dev）：
+  - 通过 Node `NODE_OPTIONS=--require` 方式兜底 `os.networkInterfaces()` 后，`uv_interface_addresses` 报错可绕过；
+  - 后续仍会命中 `listen EPERM`（包括 inspector 端口与本地监听地址），根因是当前运行沙箱不允许本地端口监听，不是业务代码问题。
+  - 以提升权限临时启动验证后（`wrangler dev`），本地服务可正常 Ready：`http://127.0.0.1:4173`。
+- 已完成：再次部署到 Cloudflare Workers。
+  - URL: `https://werewolf-worker.lucyfer81.workers.dev`
+  - Version ID: `1550d6a8-6ffc-4fd1-aa28-009d21fc8ab0`
