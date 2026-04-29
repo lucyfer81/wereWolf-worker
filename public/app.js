@@ -207,7 +207,7 @@ async function runGameToEnd() {
   const originalLabel = ui.runBtn.textContent;
   setBusy(true);
   try {
-    const maxSteps = Number(ui.maxStepsInput.value) || 24;
+    const maxSteps = Number(ui.maxStepsInput.value) || 120;
     if (!currentState) {
       const result = await requestJson("/api/game/new");
       currentState = result.state;

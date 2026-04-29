@@ -64,8 +64,8 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
     try {
       const body = await readBody<{ state?: unknown; maxSteps?: number }>(request);
       const state = body.state ? coerceState(body.state) : createNewGameState();
-      // Keep server-side batch runs conservative to avoid very long edge requests.
-      const maxSteps = Number.isFinite(body.maxSteps) ? Math.max(1, Math.min(8, Number(body.maxSteps))) : 4;
+      // Day phase is now incremental by seat, so batch runs need a higher cap.
+      const maxSteps = Number.isFinite(body.maxSteps) ? Math.max(1, Math.min(120, Number(body.maxSteps))) : 24;
       const result = await runToEnd(state, env, maxSteps);
       return json(result);
     } catch (error) {
