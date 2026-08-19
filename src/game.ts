@@ -71,7 +71,7 @@ export interface DayProgress {
   secondVoteAnnounced: boolean;
 }
 
-interface VoteDecision {
+export interface VoteDecision {
   target: string;
   confidence: "high" | "medium" | "low";
   riskIfWrong: string;
@@ -83,6 +83,7 @@ interface VoteDecision {
 interface VoteValidationOptions {
   alivePlayers: string[];
   evidenceSourceText: string;
+  speechAndDeathText: string;
   requireRiskIfWrong: boolean;
   consensusTargets?: string[];
 }
@@ -152,8 +153,6 @@ const DEFAULT_VOTING_STYLES: Record<string, VoteStyleKey> = {
   Seat7: "contrarian",
   Seat8: "pressure",
 };
-
-const HERD_EVIDENCE_HINTS = ["大家", "多数", "最高票", "票型", "都在投", "跟票", "跟风", "随大流"];
 
 const GAME_MASTER_SYSTEM_PROMPT = `
 # 狼人杀游戏管理员 (GameMaster)
@@ -508,40 +507,67 @@ function chooseFallbackAltTarget(target: string, alivePlayers: string[]): string
   return alivePlayers.find((seat) => seat !== target) ?? target;
 }
 
-function buildVoteEvidenceFacts(
+export interface VoteEvidenceContext {
+  factsText: string;
+  sourceText: string;
+  speechAndDeathText: string;
+}
+
+export function buildVoteEvidenceFacts(
   state: GameState,
   speeches: Record<string, string>,
   recentDeath?: PublicEvent,
   voteDistribution?: string,
-): { factsText: string; sourceText: string } {
-  const facts: string[] = [];
+): VoteEvidenceContext {
+  type FactKind = "speech" | "death" | "vote" | "announcement";
+  const typedFacts: { fact: string; kind: FactKind }[] = [];
+
   const recentPublicFacts = state.publicEventLog
-    .filter((event) => ["speech", "death", "announcement", "vote_distribution"].includes(event.type))
+    .filter((event) =>
+      ["speech", "death", "announcement", "vote_distribution", "vote_result"].includes(event.type),
+    )
     .slice(-24);
 
   for (const event of recentPublicFacts) {
-    facts.push(`Day${event.day}-${event.phase} ${event.speaker}: ${event.content}`);
+    const kind: FactKind =
+      event.type === "speech"
+        ? "speech"
+        : event.type === "death"
+          ? "death"
+          : event.type === "announcement"
+            ? "announcement"
+            : "vote";
+    typedFacts.push({ fact: `Day${event.day}-${event.phase} ${event.speaker}: ${event.content}`, kind });
   }
 
   if (recentDeath) {
-    facts.push(`最近死亡事件：${recentDeath.content}`);
+    typedFacts.push({ fact: `最近死亡事件：${recentDeath.content}`, kind: "death" });
   }
 
   for (const playerName of sortSeats(Object.keys(speeches))) {
-    facts.push(`${playerName} 当日发言：${speeches[playerName] ?? "（无）"}`);
+    typedFacts.push({ fact: `${playerName} 当日发言：${speeches[playerName] ?? "（无）"}`, kind: "speech" });
   }
 
   if (voteDistribution) {
     for (const line of voteDistribution.split("\n").map((line) => line.trim()).filter(Boolean)) {
-      facts.push(`第一轮票型：${line}`);
+      typedFacts.push({ fact: `第一轮票型：${line}`, kind: "vote" });
     }
   }
 
-  const dedupedFacts = facts.filter((fact, idx) => facts.indexOf(fact) === idx);
-  const numberedFacts = dedupedFacts.map((fact, idx) => `${idx + 1}. ${fact}`);
+  const seen = new Set<string>();
+  const unique = typedFacts.filter(({ fact }) => {
+    if (seen.has(fact)) return false;
+    seen.add(fact);
+    return true;
+  });
+
   return {
-    factsText: numberedFacts.join("\n"),
-    sourceText: dedupedFacts.join("\n"),
+    factsText: unique.map(({ fact }, idx) => `${idx + 1}. ${fact}`).join("\n"),
+    sourceText: unique.map(({ fact }) => fact).join("\n"),
+    speechAndDeathText: unique
+      .filter(({ kind }) => kind === "speech" || kind === "death")
+      .map(({ fact }) => fact)
+      .join("\n"),
   };
 }
 
@@ -556,8 +582,19 @@ function parseVoteDecision(response: Record<string, unknown>, defaultTarget: str
   };
 }
 
-function hasIndependentEvidenceForConsensusTarget(evidence: string[], target: string): boolean {
-  return evidence.some((item) => item.includes(target) && !HERD_EVIDENCE_HINTS.some((hint) => item.includes(hint)));
+export function hasIndependentEvidenceForConsensusTarget(
+  evidence: string[],
+  target: string,
+  speechAndDeathText: string,
+): boolean {
+  const sourceNormalized = normalizeEvidenceMatchText(speechAndDeathText);
+  return evidence.some((item) => {
+    if (!item.includes(target)) return false;
+    return extractEvidenceQuotes(item).some((quote) => {
+      const normalizedQuote = normalizeEvidenceMatchText(quote);
+      return normalizedQuote.length >= 2 && sourceNormalized.includes(normalizedQuote);
+    });
+  });
 }
 
 function validateEvidenceArray(
@@ -587,7 +624,7 @@ function validateEvidenceArray(
   return null;
 }
 
-function validateVoteDecision(
+export function validateVoteDecision(
   playerName: string,
   decision: VoteDecision,
   options: VoteValidationOptions,
@@ -622,8 +659,8 @@ function validateVoteDecision(
   }
 
   if (options.consensusTargets?.includes(decision.target)) {
-    if (!hasIndependentEvidenceForConsensusTarget(decision.evidence, decision.target)) {
-      return `命中最高票目标 ${decision.target} 时，必须给出至少一条指向该目标的独立证据`;
+    if (!hasIndependentEvidenceForConsensusTarget(decision.evidence, decision.target, options.speechAndDeathText)) {
+      return `命中最高票目标 ${decision.target} 时，必须给出至少一条指向该目标言行的独立证据`;
     }
   }
 
@@ -1239,6 +1276,7 @@ async function runDayPhaseStep(
       let voteIssue = validateVoteDecision(playerName, decision, {
         alivePlayers: aliveSorted,
         evidenceSourceText: firstRoundEvidence.sourceText,
+        speechAndDeathText: firstRoundEvidence.speechAndDeathText,
         requireRiskIfWrong: true,
       });
 
@@ -1259,6 +1297,7 @@ async function runDayPhaseStep(
         voteIssue = validateVoteDecision(playerName, decision, {
           alivePlayers: aliveSorted,
           evidenceSourceText: firstRoundEvidence.sourceText,
+          speechAndDeathText: firstRoundEvidence.speechAndDeathText,
           requireRiskIfWrong: true,
         });
       }
@@ -1368,6 +1407,7 @@ async function runDayPhaseStep(
       let voteIssue = validateVoteDecision(playerName, decision, {
         alivePlayers: aliveSorted,
         evidenceSourceText: secondRoundEvidence.sourceText,
+        speechAndDeathText: secondRoundEvidence.speechAndDeathText,
         requireRiskIfWrong: false,
         consensusTargets: progress.consensusTargets,
       });
@@ -1392,6 +1432,7 @@ async function runDayPhaseStep(
         voteIssue = validateVoteDecision(playerName, decision, {
           alivePlayers: aliveSorted,
           evidenceSourceText: secondRoundEvidence.sourceText,
+          speechAndDeathText: secondRoundEvidence.speechAndDeathText,
           requireRiskIfWrong: false,
           consensusTargets: progress.consensusTargets,
         });
