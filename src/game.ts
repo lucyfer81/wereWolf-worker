@@ -26,6 +26,7 @@ import {
   sortSeats,
 } from "./gameUtils";
 import {
+  buildNightKillTask,
   buildPlayerSystemMessage,
   buildSpeechRetryTask,
   buildSpeechTask,
@@ -817,18 +818,7 @@ async function runNightPhase(
 
   for (const werewolf of aliveWerewolves) {
     const teammates = aliveWerewolves.filter((p) => p !== werewolf);
-    let task = [
-      `现在是第 ${state.currentDay} 天夜晚。`,
-      "",
-      `你是狼人。你的同伴：${teammates.join(", ") || "（无）"}`,
-      `当前存活玩家：${sortSeats(state.alivePlayers).join(", ")}`,
-      "请选择今晚的击杀目标。",
-      "小提示：过于完美的推理可能引起注意，偶尔保持模糊更安全。",
-    ].join("\n");
-
-    if (state.playerObservations[werewolf]) {
-      task += `\n你之前关注的观察对象：${state.playerObservations[werewolf]}`;
-    }
+    const task = buildNightKillTask(state, werewolf, teammates);
 
     try {
       const response = await getPlayerResponse(state, client, model, werewolf, task);

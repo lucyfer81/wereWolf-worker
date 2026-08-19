@@ -1,4 +1,4 @@
-import { PLAYER_NAMES, extractPrimarySuspicionTarget } from "./gameUtils";
+import { PLAYER_NAMES, extractPrimarySuspicionTarget, sortSeats } from "./gameUtils";
 import type { GameState, Role } from "./game";
 
 export interface PersonaCard {
@@ -269,4 +269,41 @@ export function buildSpeechRetryTask(
     `- 你上一版 evidence：${JSON.stringify(previous.evidence, null, 2)}`,
     "请重新输出 JSON。",
   ].join("\n");
+}
+
+export function buildNightKillTask(state: GameState, werewolf: string, teammates: string[]): string {
+  const parts = [
+    `现在是第 ${state.currentDay} 天夜晚，狼人行动时间。`,
+    "",
+    `你是狼人。你的同伴：${teammates.join(", ") || "（无）"}`,
+    `当前存活玩家：${sortSeats(state.alivePlayers).join(", ")}`,
+  ];
+
+  const lastDayDeath = [...state.publicEventLog]
+    .reverse()
+    .find((event) => event.type === "death" && event.phase === "day");
+  if (lastDayDeath) {
+    parts.push(`昨天白天被处决：${lastDayDeath.content}`);
+  }
+
+  parts.push(
+    "",
+    "## 击杀优先级（从高到低）",
+    "1. 发言最有说服力、正在把村民带向错误方向的好人——会推理的人留着就是威胁",
+    "2. 票型和言论上最可能投你或队友的人",
+    "3. 几乎无人怀疑的“干净牌”——留着高嫌疑者替你们背锅",
+    "",
+    "## 决策要求",
+    "- 选择一个击杀目标（存活玩家，不能是狼人）",
+    "- content 用一句话说明为什么此人威胁最大，可引用其今天的发言",
+    "- 避免选择会暴露狼队思路的目标：例如你今天刚公开指控过的人，除非理由充分",
+    "",
+    "请输出 JSON：target + content。",
+  );
+
+  if (state.playerObservations[werewolf]) {
+    parts.push("", `你之前关注的观察对象：${state.playerObservations[werewolf]}`);
+  }
+
+  return parts.join("\n");
 }
