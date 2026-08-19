@@ -55,7 +55,7 @@ interface FinalVote {
   why_change: string | null;
 }
 
-interface DayProgress {
+export interface DayProgress {
   day: number;
   aliveOrder: string[];
   stage: DayStage;
@@ -940,6 +940,97 @@ async function runNightPhase(
   addEvent(state, "death", "GameMaster", `${finalTarget} 被狼人杀害`, "night");
 }
 
+export function buildPlayerMemory(state: GameState, playerName: string): string {
+  if (state.currentDay <= 1) return "";
+
+  const lines: string[] = [];
+  const pastSpeeches = state.publicEventLog.filter(
+    (event) => event.type === "speech" && event.speaker === playerName && event.day < state.currentDay,
+  );
+  const lastSpeech = pastSpeeches[pastSpeeches.length - 1];
+  if (lastSpeech) {
+    lines.push(`- 你昨天的发言："${lastSpeech.content}"`);
+  }
+
+  const pastVoteResults = state.publicEventLog.filter(
+    (event) => event.type === "vote_result" && event.day < state.currentDay,
+  );
+  const lastVoteResult = pastVoteResults[pastVoteResults.length - 1];
+  if (lastVoteResult) {
+    const votes = (lastVoteResult.votes ?? {}) as Record<string, string>;
+    const changed = (lastVoteResult.changed ?? {}) as Record<string, boolean>;
+    const myVote = votes[playerName];
+    if (myVote) {
+      lines.push(`- 你昨天的终投：${myVote}${changed[playerName] ? "（你改过票）" : ""}`);
+    }
+  }
+
+  if (state.playerObservations[playerName]) {
+    lines.push(`- 你声明的观察对象：${state.playerObservations[playerName]}`);
+  }
+
+  if (!lines.length) return "";
+  return ["## 你的历史（只有你自己知道）", ...lines, "- 你今天的发言不能与昨天自相矛盾"].join("\n");
+}
+
+export function resolveDayVote(state: GameState, progress: DayProgress): void {
+  appendTimeline(state, `${"─".repeat(70)}`);
+  appendTimeline(state, "📊 投票统计");
+  appendTimeline(state, `${"─".repeat(70)}`);
+
+  const changedCount = Object.values(progress.finalVotes).filter((vote) => vote.changed_vote).length;
+  appendTimeline(state, `📈 改票统计：${changedCount} 名玩家改变了投票`);
+
+  const voteCounts: Record<string, number> = {};
+  for (const vote of Object.values(progress.finalVotes)) {
+    voteCounts[vote.target] = (voteCounts[vote.target] ?? 0) + 1;
+  }
+
+  for (const [player, count] of Object.entries(voteCounts).sort((a, b) => seatNumber(a[0]) - seatNumber(b[0]))) {
+    appendTimeline(state, `  ${player}: ${count} 票`);
+  }
+
+  const maxVotes = Math.max(...Object.values(voteCounts));
+  const eliminated = Object.entries(voteCounts)
+    .filter(([, count]) => count === maxVotes)
+    .map(([player]) => player);
+
+  if (eliminated.length === 1) {
+    const eliminatedPlayer = eliminated[0];
+    state.alivePlayers = state.alivePlayers.filter((p) => p !== eliminatedPlayer);
+    appendTimeline(state, `💀 ${eliminatedPlayer} 被处决（${formatRole(state.roles[eliminatedPlayer])}）`);
+    addEvent(state, "death", "GameMaster", `${eliminatedPlayer} 被投票处决`, "day");
+  } else {
+    appendTimeline(state, `⚖️ 平票（${eliminated.join(", ")}），无人被处决`);
+  }
+
+  const voteSummary = Object.entries(progress.finalVotes)
+    .sort((a, b) => seatNumber(a[0]) - seatNumber(b[0]))
+    .map(([player, vote]) => `${player}→${vote.target}`)
+    .join("；");
+  addEvent(state, "vote_result", "GameMaster", `终投结果：${voteSummary}`, "day", {
+    round: 2,
+    votes: Object.fromEntries(
+      Object.entries(progress.finalVotes).map(([player, vote]) => [player, vote.target]),
+    ),
+    changed: Object.fromEntries(
+      Object.entries(progress.finalVotes).map(([player, vote]) => [player, vote.changed_vote]),
+    ),
+  });
+
+  if (state.currentDay === 1) {
+    const topVotes = Math.max(...Object.values(voteCounts));
+    const targetCount = Object.keys(voteCounts).length;
+    if (topVotes <= 4 || targetCount >= 4) {
+      appendTimeline(state, `✅ Day1 投票分散度：高（最高票：${topVotes}，目标数：${targetCount}）`);
+    } else {
+      appendTimeline(state, `⚠️ Day1 投票分散度：低（最高票：${topVotes}，目标数：${targetCount}）`);
+    }
+  }
+
+  state.dayProgress = null;
+}
+
 async function runDayPhaseStep(
   state: GameState,
   client: OpenAI,
@@ -1368,47 +1459,7 @@ async function runDayPhaseStep(
     return false;
   }
 
-  appendTimeline(state, `${"─".repeat(70)}`);
-  appendTimeline(state, "📊 投票统计");
-  appendTimeline(state, `${"─".repeat(70)}`);
-
-  const changedCount = Object.values(progress.finalVotes).filter((vote) => vote.changed_vote).length;
-  appendTimeline(state, `📈 改票统计：${changedCount} 名玩家改变了投票`);
-
-  const voteCounts: Record<string, number> = {};
-  for (const vote of Object.values(progress.finalVotes)) {
-    voteCounts[vote.target] = (voteCounts[vote.target] ?? 0) + 1;
-  }
-
-  for (const [player, count] of Object.entries(voteCounts).sort((a, b) => seatNumber(a[0]) - seatNumber(b[0]))) {
-    appendTimeline(state, `  ${player}: ${count} 票`);
-  }
-
-  const maxVotes = Math.max(...Object.values(voteCounts));
-  const eliminated = Object.entries(voteCounts)
-    .filter(([, count]) => count === maxVotes)
-    .map(([player]) => player);
-
-  if (eliminated.length === 1) {
-    const eliminatedPlayer = eliminated[0];
-    state.alivePlayers = state.alivePlayers.filter((p) => p !== eliminatedPlayer);
-    appendTimeline(state, `💀 ${eliminatedPlayer} 被处决（${formatRole(state.roles[eliminatedPlayer])}）`);
-    addEvent(state, "death", "GameMaster", `${eliminatedPlayer} 被投票处决`, "day");
-  } else {
-    appendTimeline(state, `⚖️ 平票（${eliminated.join(", ")}），无人被处决`);
-  }
-
-  if (state.currentDay === 1) {
-    const topVotes = Math.max(...Object.values(voteCounts));
-    const targetCount = Object.keys(voteCounts).length;
-    if (topVotes <= 4 || targetCount >= 4) {
-      appendTimeline(state, `✅ Day1 投票分散度：高（最高票：${topVotes}，目标数：${targetCount}）`);
-    } else {
-      appendTimeline(state, `⚠️ Day1 投票分散度：低（最高票：${topVotes}，目标数：${targetCount}）`);
-    }
-  }
-
-  state.dayProgress = null;
+  resolveDayVote(state, progress);
   return true;
 }
 
