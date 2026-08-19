@@ -25,6 +25,7 @@ import {
   sortSeats,
 } from "./gameUtils";
 import {
+  buildDaySummaryTask,
   buildFirstVoteTask,
   buildNightKillTask,
   buildPlayerSystemMessage,
@@ -32,6 +33,7 @@ import {
   buildSpeechRetryTask,
   buildSpeechTask,
   findAccusationsAgainst,
+  GAME_MASTER_SYSTEM_PROMPT,
 } from "./prompts";
 
 export type Role = "werewolf" | "villager";
@@ -109,13 +111,6 @@ export interface GameState {
   winner: Winner;
   lastUpdatedAt: string;
 }
-
-const GAME_MASTER_SYSTEM_PROMPT = `
-# 狼人杀游戏管理员 (GameMaster)
-
-你是狼人杀游戏的 Game Master（游戏管理员），负责推进游戏流程和裁决胜负。
-你只需要输出 JSON，不要输出额外文本。
-`;
 
 function nowISO(): string {
   return new Date().toISOString();
@@ -761,14 +756,7 @@ async function generateDaySummary(
   speeches: Record<string, string>,
 ): Promise<string> {
   const fallbackSummary = buildFallbackDaySummary(state.currentDay, speeches, state.alivePlayers);
-  const gmTask = [
-    `请为第 ${state.currentDay} 天的发言生成投票摘要。`,
-    "以下是今天所有存活玩家的发言：",
-    JSON.stringify(speeches, null, 2),
-    "你必须只输出 JSON：{\"summary\":\"...\"}。",
-    "summary 必须仅包含事实，不表达立场，且最多 6 行。",
-    "每行尽量覆盖：点名怀疑对象、支持/反对对象、是否给出理由、是否质疑带节奏。",
-  ].join("\n");
+  const gmTask = buildDaySummaryTask(state.currentDay, speeches);
 
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {

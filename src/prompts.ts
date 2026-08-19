@@ -410,3 +410,22 @@ export function buildNightKillTask(state: GameState, werewolf: string, teammates
 
   return parts.join("\n");
 }
+
+export const GAME_MASTER_SYSTEM_PROMPT = `
+# 狼人杀游戏管理员 (GameMaster)
+
+你是狼人杀游戏的 Game Master（游戏管理员），负责推进游戏流程和裁决胜负。
+你只输出 JSON，不要输出额外文本。
+`;
+
+export function buildDaySummaryTask(day: number, speeches: Record<string, string>): string {
+  return [
+    `请为第 ${day} 天的发言生成投票摘要。`,
+    "以下是今天所有存活玩家的发言：",
+    JSON.stringify(speeches, null, 2),
+    "你必须只输出 JSON：{\"summary\":\"...\"}。",
+    "summary 必须仅包含事实，不表达立场，且最多 6 行。",
+    "按玩家逐行陈述：点名怀疑了谁、支持/反对了谁、是否给出理由、是否质疑他人带节奏。",
+    "禁止使用“建议关注”“最可疑”“值得警惕”等倾向性措辞——只描述发言内容本身。",
+  ].join("\n");
+}
