@@ -25,11 +25,11 @@ import {
   seatNumber,
   sortSeats,
 } from "./gameUtils";
+import { buildPlayerSystemMessage } from "./prompts";
 
-type Role = "werewolf" | "villager";
+export type Role = "werewolf" | "villager";
 type Winner = "werewolves" | "villagers" | "none";
 type Phase = "day" | "night";
-type VoteStyleKey = "conservative" | "pressure" | "contrarian" | "logic_driven";
 type DayStage = "speeches" | "summary" | "first_vote" | "second_vote" | "resolve";
 
 export interface EnvVars {
@@ -95,7 +95,6 @@ export interface GameState {
   currentDay: number;
   nextPhase: Phase;
   dayProgress: DayProgress | null;
-  votingStyles: Record<string, VoteStyleKey>;
   playerObservations: Record<string, string>;
   publicEventLog: PublicEvent[];
   timeline: string[];
@@ -104,110 +103,11 @@ export interface GameState {
   lastUpdatedAt: string;
 }
 
-const VOTING_STYLE_CARDS: Record<
-  VoteStyleKey,
-  { name: string; rules: string; scenarios: string[] }
-> = {
-  conservative: {
-    name: "保守谨慎型",
-    rules: "无确凿证据时弃票（投给自己），不急于站队",
-    scenarios: [
-      "场景1：Day 1 没有人提出实质性指控时，选择观望",
-      "场景2：看到多人互相指控但逻辑都薄弱时，不急于站队",
-    ],
-  },
-  pressure: {
-    name: "施压型",
-    rules: "Day 1 倾向投票给理由最弱的发言者",
-    scenarios: [
-      "场景1：某人的发言仅为“我觉得 XXX 可疑”而无具体行为时，优先投他",
-      "场景2：多人保持观望时，主动制造压力迫使表态",
-    ],
-  },
-  contrarian: {
-    name: "反共识型",
-    rules:
-      "当多人迅速聚焦同一目标时，优先评估“最早提出主叙事的人”而非直接投给被聚焦者",
-    scenarios: [
-      "场景1：看到 3 人同投 Seat1 时，检查谁最先指控 Seat1，评估其是否在带节奏",
-      "场景2：不直接投给被聚焦者，而是投给“造势者”",
-    ],
-  },
-  logic_driven: {
-    name: "逻辑驱动型",
-    rules: "优先抓自相矛盾或论据跳跃的发言",
-    scenarios: [
-      "场景1：发现某人前后发言矛盾（例如先说观察 XXX 后又投 XXX），标记为可疑",
-      "场景2：某人论据从行为 A 跳到行为 B 而无逻辑链条，重点怀疑",
-    ],
-  },
-};
-
-const DEFAULT_VOTING_STYLES: Record<string, VoteStyleKey> = {
-  Seat1: "conservative",
-  Seat2: "logic_driven",
-  Seat3: "contrarian",
-  Seat4: "pressure",
-  Seat5: "conservative",
-  Seat6: "logic_driven",
-  Seat7: "contrarian",
-  Seat8: "pressure",
-};
-
 const GAME_MASTER_SYSTEM_PROMPT = `
 # 狼人杀游戏管理员 (GameMaster)
 
 你是狼人杀游戏的 Game Master（游戏管理员），负责推进游戏流程和裁决胜负。
 你只需要输出 JSON，不要输出额外文本。
-`;
-
-const PLAYER_SYSTEM_TEMPLATE = `
-# 狼人杀游戏：你是一名玩家
-
-## 当前处境
-
-你现在身处一个有8名玩家的村庄，其中有2名隐藏的狼人。
-- 你的座位号：**{player_name}**（你就是这个玩家）
-- 你的身份：**{role}**
-- 你知道的信息：{role_info}
-- 其他玩家：Seat1 - Seat8
-
-## 你的投票风格
-
-你是 {style_name} 型玩家。
-
-规则：{style_rules}
-
-场景示例：
-{style_scenarios}
-
-## 你不知道的信息
-
-除了身份卡透露的信息外，你不知道任何人的真实身份。
-你只能通过他们的发言、投票、行为来判断谁是敌人。
-你必须承认自己不知道，不能假装确定或编造不存在的信息。
-你必须始终把“我”理解为 {player_name} 本人。
-白天发言时禁止怀疑或指控自己；投票时允许因观望投给自己，但这不等同于自我指控。
-
-## 夜晚发生什么
-
-{night_action}
-
-## 输出格式
-
-请以 JSON 格式回复：
-{
-  "action": "speech | vote | night_action",
-  "target": "Seat1 | Seat2 | Seat3 | Seat4 | Seat5 | Seat6 | Seat7 | Seat8",
-  "content": "你的发言内容或决策理由（<=120字）",
-  "confidence": "high | medium | low",
-  "risk_if_wrong": "如果投错会导致什么后果（投票时必须填写）",
-  "alt_target": "备选目标（必须是不同于 target 的存活玩家）",
-  "target_vs_alt_reason": "为什么 target 比 alt_target 更可疑（>=8字）",
-  "evidence": ["证据1（含《可核查引用》）", "证据2（含《可核查引用》）"],
-  "changed_vote": false,
-  "why_change": ""
-}
 `;
 
 function nowISO(): string {
@@ -736,31 +636,6 @@ function getRecentNightDeath(state: GameState): PublicEvent | undefined {
   return [...state.publicEventLog]
     .reverse()
     .find((event) => event.type === "death" && event.phase === "night");
-}
-
-function buildPlayerSystemMessage(
-  playerName: string,
-  state: GameState,
-): string {
-  const role = state.roles[playerName];
-  const style = VOTING_STYLE_CARDS[state.votingStyles[playerName]];
-
-  let roleInfo = "你是村民。你不知道其他任何人的身份。";
-  let nightAction = "夜晚时，村民没有行动，请等待天亮。";
-
-  if (role === "werewolf") {
-    const teammates = PLAYER_NAMES.filter((p) => state.roles[p] === "werewolf" && p !== playerName);
-    roleInfo = `你是狼人。你的同伴是：${teammates.join(", ") || "（无）"}`;
-    nightAction = "夜晚时，与同伴商议并选择一个村民进行击杀。";
-  }
-
-  return PLAYER_SYSTEM_TEMPLATE.replace("{player_name}", playerName)
-    .replace("{role}", role)
-    .replace("{role_info}", roleInfo)
-    .replace("{style_name}", style.name)
-    .replace("{style_rules}", style.rules)
-    .replace("{style_scenarios}", style.scenarios.join("\n"))
-    .replace("{night_action}", nightAction);
 }
 
 function requireModelEnv(env: EnvVars): { apiKey: string; model: string; baseURL: string } {
@@ -1523,7 +1398,6 @@ export function createNewGameState(): GameState {
     currentDay: 0,
     nextPhase: "night",
     dayProgress: null,
-    votingStyles: { ...DEFAULT_VOTING_STYLES },
     playerObservations: {},
     publicEventLog: [],
     timeline: [],
@@ -1572,7 +1446,6 @@ export function coerceState(input: unknown): GameState {
       candidate.dayProgress && typeof candidate.dayProgress === "object"
         ? (candidate.dayProgress as DayProgress)
         : null,
-    votingStyles: { ...DEFAULT_VOTING_STYLES, ...(candidate.votingStyles ?? {}) },
     playerObservations: { ...(candidate.playerObservations ?? {}) },
     publicEventLog: Array.isArray(candidate.publicEventLog) ? candidate.publicEventLog : [],
     timeline: Array.isArray(candidate.timeline) ? candidate.timeline : [],
