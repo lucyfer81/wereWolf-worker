@@ -50,3 +50,30 @@ Original prompt: 我要用openAI-SDK-JS来复刻~/PyProjects/agentRPG/ 目录下
 - 已完成：再次部署到 Cloudflare Workers。
   - URL: `https://werewolf-worker.lucyfer81.workers.dev`
   - Version ID: `1550d6a8-6ffc-4fd1-aa28-009d21fc8ab0`
+
+## 2026-08-19 提示词体系重构
+
+- 已完成：提示词体系重构全量落地（Task 1-8）：
+  - 投票风格替换为 8 张座位人设卡并注入 system prompt（人设/口吻/目标/focus 字段）；
+  - 发言任务重建：被指控答辩要求、180 字硬约束、focus 主题、狼人生存提醒、Day2 必须给出怀疑目标；
+  - 夜间击杀任务围绕威胁优先级重建（击杀优先级/同伴名单/存活名单/处决上下文）；
+  - 投票任务重建：初投反锚定定调 + Day1 分散提示，终投博弈定调 + 改票自动对比（why_change 公示），改票处理逻辑简化；
+  - 新增 vote_result 事件与玩家记忆注入（昨日发言/昨日终投/观察对象）；
+  - 反共识税重构为类型化证据事实（仅言行证据可跟票，纯票型证据不允许跟最高票）；
+  - GM 摘要收紧（逐玩家陈述、禁止倾向性措辞、保底与重试）。
+- 已完成：引入 vitest（`npm test`），纯函数拆分至 `src/gameUtils.ts`；测试文件清单（8 个文件 / 38 个用例）：
+  - `gameUtils.test.ts`(5)、`systemPrompt.test.ts`(2)、`evidence.test.ts`(4)、`speechPrompt.test.ts`(11)、`votePrompt.test.ts`(5)、`memory.test.ts`(4)、`nightPrompt.test.ts`(3)、`gmSummary.test.ts`(2)。
+- 已完成：全量静态验证通过：
+  - `npm run check`（tsc --noEmit）通过；
+  - `npm test` 8 个文件 / 38 个用例全部通过；
+  - `npx wrangler deploy --dry-run` 通过（353.62 KiB / gzip 71.97 KiB，ASSETS 与模型变量绑定正常）。
+- 已完成：本地 API 冒烟（本次环境允许本地监听，`wrangler dev` Ready on http://localhost:8787）：
+  - `GET /api/health` 返回 ok 且 `hasApiKey: true`；
+  - `POST /api/game/new` 返回完整 state（roles/timeline 等）。
+- 注意：本环境设有 `http_proxy` 环境变量，curl 本地端口需加 `--noproxy '*'`，否则请求被代理拦截返回空响应。
+- 已完成：真实模型全量对局验证 2 局（`/api/game/step` 客户端循环，DeepSeek-V3.2 + Qwen3-8B GM）：
+  - 第 1 局：3 天结束，狼人胜；Day1 投票分散度“高”（最高票 4 / 目标数 4）；每日终投改票人数 2/1/1（均 > 0）；保底发言 6 次（共 15 次发言），投票二次输出违规 10+7 次；
+  - 第 2 局：2 天结束，狼人胜；Day1 投票分散度“高”（最高票 4 / 目标数 3）；每日终投改票人数 1/1（均 > 0）；保底发言 6 次（共 12 次发言），投票二次输出违规 1+3 次；
+  - 口吻抽查：座位人设区分明显（Seat1 账房、Seat7 戏班、Seat8 烧烤摊等口吻跨局稳定）；跨天一致性良好（能抓住“昨日称记档观望、今日突然转攻击”式翻供并要求解释）。
+- 注意：证据引用校验较严格，模型常因引文标点差异/嵌套《》/漏写引号未命中公共事实而触发纠错重试与保底发言（发言保底率约 40%-50%），对局可正常推进，建议后续放宽引文匹配（如忽略首尾标点、容忍嵌套括号）。
+- 注意：两局均狼人获胜（样本量小，仅作记录）。
