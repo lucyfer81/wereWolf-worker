@@ -3,7 +3,6 @@ import {
   PLAYER_NAMES,
   TOTAL_PLAYERS,
   WEREWOLF_COUNT,
-  asBoolean,
   asString,
   asStringArray,
   chooseFallbackSpeechTarget,
@@ -26,8 +25,10 @@ import {
   sortSeats,
 } from "./gameUtils";
 import {
+  buildFirstVoteTask,
   buildNightKillTask,
   buildPlayerSystemMessage,
+  buildSecondVoteTask,
   buildSpeechRetryTask,
   buildSpeechTask,
   findAccusationsAgainst,
@@ -55,7 +56,7 @@ export interface PublicEvent {
   [key: string]: unknown;
 }
 
-interface FinalVote {
+export interface FinalVote {
   target: string;
   changed_vote: boolean;
   why_change: string | null;
@@ -374,14 +375,17 @@ function checkWinCondition(state: GameState): Winner {
   return "none";
 }
 
-function hasChangedVote(initialTarget: string, finalTarget: string): boolean {
-  return initialTarget !== finalTarget;
-}
-
-function isValidVoteChange(changedVote: boolean, whyChange?: string | null): boolean {
-  if (!changedVote) return true;
-  if (!whyChange) return false;
-  return whyChange.trim().length >= 5;
+export function finalizeSecondRoundVote(
+  initialTarget: string,
+  decision: VoteDecision,
+  whyChange: string,
+): FinalVote {
+  const actualChanged = initialTarget !== decision.target;
+  return {
+    target: decision.target,
+    changed_vote: actualChanged,
+    why_change: actualChanged && whyChange.trim() ? whyChange.trim() : null,
+  };
 }
 
 function generateVoteDistribution(votes: Record<string, string | null>): string {
@@ -1100,39 +1104,20 @@ async function runDayPhaseStep(
     }
 
     const firstRoundEvidence = buildVoteEvidenceFacts(state, progress.speeches, recentDeath);
-    const taskParts = [
-      `现在是第 ${state.currentDay} 天白天【第一轮：初投】。`,
-      `你的身份：${state.roles[playerName]}`,
-      `当前存活玩家：${aliveSorted.join(", ")}`,
-      "",
-      "GM公共公告摘要：",
-      progress.daySummary,
-      "",
-      "可核查公共事实（evidence 必须引用其中原文片段）：",
-      firstRoundEvidence.factsText,
-      "",
-      `你今天的发言："${progress.speeches[playerName] ?? "（无）"}"`,
-      "",
-      "投票约束：",
-      "- 这是第一轮私下投票，结果不会立即公开",
-      "- 你必须在 risk_if_wrong 字段填写投错代价（>=6字）",
-      "- 你必须填写 evidence 数组，至少2条；每条都要包含《引用片段》且可在公共事实中找到",
-      "- 你必须填写 alt_target，且 alt_target 必须是不同于 target 的存活玩家",
-      "- 你必须填写 target_vs_alt_reason（>=8字），说明为何 target 比 alt_target 更可疑",
-      "- 不要盲目跟风，基于摘要和你自己的发言决策",
-      "",
-      "请投票给你认为最可能是狼人的玩家，或投给自己表示观望。",
-    ];
-
-    if (recentDeath) {
-      taskParts.push(`最近一次死亡：${recentDeath.content}`);
-    }
-    if (state.playerObservations[playerName]) {
-      taskParts.push(`记住你要观察的对象：${state.playerObservations[playerName]}`);
-    }
+    const baseTask = buildFirstVoteTask({
+      playerName,
+      role: state.roles[playerName],
+      day: state.currentDay,
+      alivePlayers: aliveSorted,
+      daySummary: progress.daySummary,
+      factsText: firstRoundEvidence.factsText,
+      mySpeech: progress.speeches[playerName] ?? "（无）",
+      memory: buildPlayerMemory(state, playerName),
+      observation: state.playerObservations[playerName] ?? null,
+      recentDeathContent: recentDeath?.content ?? null,
+    });
 
     try {
-      const baseTask = taskParts.join("\n");
       const response = await getPlayerResponse(state, client, model, playerName, baseTask);
       let decision = parseVoteDecision(response, playerName);
       let voteIssue = validateVoteDecision(playerName, decision, {
@@ -1222,49 +1207,26 @@ async function runDayPhaseStep(
       recentDeath,
       progress.voteDistribution,
     );
-    const taskParts = [
-      `现在是第 ${state.currentDay} 天白天【第二轮：终投】。`,
-      `你的身份：${state.roles[playerName]}`,
-      `当前存活玩家：${aliveSorted.join(", ")}`,
-      "",
-      "GM公共公告摘要：",
-      progress.daySummary,
-      "",
-      progress.voteDistribution,
-      "",
-      "可核查公共事实（evidence 必须引用其中原文片段）：",
-      secondRoundEvidence.factsText,
-      "",
-      `当前最高票目标：${progress.consensusTargets.join(", ") || "（无）"}`,
-      `你第一轮投给了：${progress.initialVotes[playerName] ?? playerName}`,
-      `你今天的发言："${progress.speeches[playerName] ?? "（无）"}"`,
-      "",
-      "投票约束：",
-      "- 你可以看到第一轮票型分布，据此调整决策",
-      "- 你必须填写 evidence 数组，至少2条；每条都要包含《引用片段》且可在公共事实中找到",
-      "- 你必须填写 alt_target，且 alt_target 必须是不同于 target 的存活玩家",
-      "- 你必须填写 target_vs_alt_reason（>=8字），说明为何 target 比 alt_target 更可疑",
-      "- 若 target 命中当前最高票目标，必须额外给出至少一条指向该目标的独立证据（不能只说“大家都投”）",
-      "- 改票时 changed_vote 必须为 true",
-      "- 改票时 why_change 必须>=5字，否则改票无效",
-      "- 不改票时 changed_vote=false，why_change 为空",
-      "",
-      "请进行你的终投。",
-    ];
-
-    if (recentDeath) {
-      taskParts.push(`最近一次死亡：${recentDeath.content}`);
-    }
-    if (state.playerObservations[playerName]) {
-      taskParts.push(`记住你要观察的对象：${state.playerObservations[playerName]}`);
-    }
+    const initialTarget = progress.initialVotes[playerName] ?? playerName;
+    const baseTask = buildSecondVoteTask({
+      playerName,
+      role: state.roles[playerName],
+      day: state.currentDay,
+      alivePlayers: aliveSorted,
+      daySummary: progress.daySummary,
+      factsText: secondRoundEvidence.factsText,
+      mySpeech: progress.speeches[playerName] ?? "（无）",
+      memory: buildPlayerMemory(state, playerName),
+      observation: state.playerObservations[playerName] ?? null,
+      recentDeathContent: recentDeath?.content ?? null,
+      voteDistribution: progress.voteDistribution,
+      consensusTargets: progress.consensusTargets,
+      initialTarget,
+    });
 
     try {
-      const initialTarget = progress.initialVotes[playerName] ?? playerName;
-      const baseTask = taskParts.join("\n");
       const response = await getPlayerResponse(state, client, model, playerName, baseTask);
       let decision = parseVoteDecision(response, initialTarget);
-      let changedVote = asBoolean(response.changed_vote, false);
       let whyChange = asString(response.why_change, "").trim();
       let voteIssue = validateVoteDecision(playerName, decision, {
         alivePlayers: aliveSorted,
@@ -1284,12 +1246,11 @@ async function runDayPhaseStep(
           `- 你上一版 alt_target：${decision.altTarget || "（空）"}`,
           `- 你上一版 target_vs_alt_reason：${decision.targetVsAltReason || "（空）"}`,
           `- 你上一版 evidence：${JSON.stringify(decision.evidence, null, 2)}`,
-          "- 命中最高票目标时，必须补充独立证据，不能只写“多数人在投”。",
+          "- 命中最高票目标时，必须补充指向该目标言行的独立证据，不能只写“多数人在投”。",
           "- 请重新输出 JSON，并满足上述全部硬约束。",
         ].join("\n");
         const retry = await getPlayerResponse(state, client, model, playerName, retryTask);
         decision = parseVoteDecision(retry, initialTarget);
-        changedVote = asBoolean(retry.changed_vote, false);
         whyChange = asString(retry.why_change, "").trim();
         voteIssue = validateVoteDecision(playerName, decision, {
           alivePlayers: aliveSorted,
@@ -1308,39 +1269,11 @@ async function runDayPhaseStep(
         };
         appendTimeline(state, `⚠️ ${playerName} 第二轮二次输出仍违规（${voteIssue}），已保留第一轮票数`);
       } else {
-        const target = decision.target;
-        const actualChanged = hasChangedVote(initialTarget, target);
-        if (!actualChanged && changedVote) {
-          changedVote = false;
-          whyChange = "";
-        }
-
-        const validChange = isValidVoteChange(changedVote, whyChange);
-        if (actualChanged && !changedVote) {
-          progress.finalVotes[playerName] = {
-            target: initialTarget,
-            changed_vote: false,
-            why_change: null,
-          };
-          appendTimeline(state, `⚠️ ${playerName} 实际改票但未声明 changed_vote=true，改票无效，保留第一轮票数`);
-        } else if (actualChanged && changedVote && !validChange) {
-          progress.finalVotes[playerName] = {
-            target: initialTarget,
-            changed_vote: false,
-            why_change: null,
-          };
-          appendTimeline(state, `⚠️ ${playerName} 改票理由不足，改票无效，保留第一轮票数`);
-        } else {
-          progress.finalVotes[playerName] = {
-            target,
-            changed_vote: actualChanged ? changedVote : false,
-            why_change: whyChange.trim() ? whyChange.trim() : null,
-          };
-          const changedTag = progress.finalVotes[playerName].changed_vote ? " (改票)" : "";
-          appendTimeline(state, `🗳️ ${playerName} → ${target}${changedTag}`);
-          if (progress.finalVotes[playerName].changed_vote && progress.finalVotes[playerName].why_change) {
-            appendTimeline(state, `   理由：${progress.finalVotes[playerName].why_change}`);
-          }
+        const finalVote = finalizeSecondRoundVote(initialTarget, decision, whyChange);
+        progress.finalVotes[playerName] = finalVote;
+        appendTimeline(state, `🗳️ ${playerName} → ${finalVote.target}${finalVote.changed_vote ? " (改票)" : ""}`);
+        if (finalVote.why_change) {
+          appendTimeline(state, `   理由：${finalVote.why_change}`);
         }
       }
     } catch (error) {

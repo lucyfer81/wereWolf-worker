@@ -271,6 +271,109 @@ export function buildSpeechRetryTask(
   ].join("\n");
 }
 
+export interface VoteTaskContext {
+  playerName: string;
+  role: Role;
+  day: number;
+  alivePlayers: string[];
+  daySummary: string;
+  factsText: string;
+  mySpeech: string;
+  memory: string;
+  observation: string | null;
+  recentDeathContent: string | null;
+}
+
+export interface SecondVoteTaskContext extends VoteTaskContext {
+  voteDistribution: string;
+  consensusTargets: string[];
+  initialTarget: string;
+}
+
+export function buildFirstVoteTask(ctx: VoteTaskContext): string {
+  const parts = [
+    `现在是第 ${ctx.day} 天白天【第一轮：私下初投】。`,
+    `你的身份：${ctx.role}`,
+    `当前存活玩家：${ctx.alivePlayers.join(", ")}`,
+    "",
+  ];
+
+  if (ctx.memory) {
+    parts.push(ctx.memory, "");
+  }
+
+  parts.push("GM公共公告摘要：", ctx.daySummary);
+  parts.push("（这是事实汇总，不是投票指引——先形成你自己的判断，再对照它。）", "");
+  parts.push("可核查公共事实（evidence 必须引用其中原文片段）：", ctx.factsText, "");
+  parts.push(`你今天的发言："${ctx.mySpeech}"`, "");
+
+  if (ctx.day === 1) {
+    parts.push("Day1 信息天然稀少，投票分散是正常且健康的，无需急于站队。", "");
+  }
+
+  parts.push(
+    "投票约束：",
+    "- 这是第一轮私下投票，结果不会立即公开",
+    "- 你必须在 risk_if_wrong 字段填写投错代价（>=6字）",
+    "- evidence 至少2条；每条包含《引用片段》且可在公共事实中找到",
+    "- alt_target 必须是不同于 target 的存活玩家",
+    "- target_vs_alt_reason（>=8字）说明为何 target 比 alt_target 更可疑",
+    "",
+    "请投票给你认为最可能是狼人的玩家，或投给自己表示观望。",
+  );
+
+  if (ctx.recentDeathContent) {
+    parts.push(`最近一次死亡：${ctx.recentDeathContent}`);
+  }
+  if (ctx.observation) {
+    parts.push(`记住你要观察的对象：${ctx.observation}`);
+  }
+  return parts.join("\n");
+}
+
+export function buildSecondVoteTask(ctx: SecondVoteTaskContext): string {
+  const parts = [
+    `现在是第 ${ctx.day} 天白天【第二轮：终投】。`,
+    `你的身份：${ctx.role}`,
+    `当前存活玩家：${ctx.alivePlayers.join(", ")}`,
+    "",
+  ];
+
+  if (ctx.memory) {
+    parts.push(ctx.memory, "");
+  }
+
+  parts.push("GM公共公告摘要：", ctx.daySummary, "");
+  parts.push(ctx.voteDistribution, "");
+  parts.push("可核查公共事实（evidence 必须引用其中原文片段）：", ctx.factsText, "");
+  parts.push(`当前最高票目标：${ctx.consensusTargets.join(", ") || "（无）"}`);
+  parts.push(`你第一轮投给了：${ctx.initialTarget}`);
+  parts.push(`你今天的发言："${ctx.mySpeech}"`, "");
+
+  parts.push(
+    "## 这是最后的表态机会",
+    "你可以加入多数放逐嫌疑人，可以另立山头，也可以为人辩护——但必须给出你自己的理由。",
+    "",
+    "投票约束：",
+    "- 你可以看到第一轮票型分布，据此调整决策",
+    "- evidence 至少2条；每条包含《引用片段》且可在公共事实中找到",
+    "- alt_target 必须是不同于 target 的存活玩家",
+    "- target_vs_alt_reason（>=8字）说明为何 target 比 alt_target 更可疑",
+    "- 若 target 命中当前最高票目标，必须至少给出一条指向该目标言行的独立证据（不能只说“大家都投”）",
+    "- 改票无需声明，系统会自动对比你两轮的 target；改票时建议在 why_change 写一句理由（将公示）",
+    "",
+    "请进行你的终投。",
+  );
+
+  if (ctx.recentDeathContent) {
+    parts.push(`最近一次死亡：${ctx.recentDeathContent}`);
+  }
+  if (ctx.observation) {
+    parts.push(`记住你要观察的对象：${ctx.observation}`);
+  }
+  return parts.join("\n");
+}
+
 export function buildNightKillTask(state: GameState, werewolf: string, teammates: string[]): string {
   const parts = [
     `现在是第 ${state.currentDay} 天夜晚，狼人行动时间。`,

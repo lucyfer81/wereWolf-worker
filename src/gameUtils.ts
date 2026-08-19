@@ -19,16 +19,6 @@ export function asString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-export function asBoolean(value: unknown, fallback = false): boolean {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "string") {
-    return value.toLowerCase() === "true";
-  }
-  return fallback;
-}
-
 export function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value
