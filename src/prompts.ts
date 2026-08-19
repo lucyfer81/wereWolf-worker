@@ -386,7 +386,7 @@ export function buildNightKillTask(state: GameState, werewolf: string, teammates
     .reverse()
     .find((event) => event.type === "death" && event.phase === "day");
   if (lastDayDeath) {
-    parts.push(`昨天白天被处决：${lastDayDeath.content}`);
+    parts.push(`今天白天被处决：${lastDayDeath.content}`);
   }
 
   parts.push(

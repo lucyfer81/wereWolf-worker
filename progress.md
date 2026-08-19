@@ -62,7 +62,7 @@ Original prompt: 我要用openAI-SDK-JS来复刻~/PyProjects/agentRPG/ 目录下
   - 反共识税重构为类型化证据事实（仅言行证据可跟票，纯票型证据不允许跟最高票）；
   - GM 摘要收紧（逐玩家陈述、禁止倾向性措辞、保底与重试）。
 - 已完成：引入 vitest（`npm test`），纯函数拆分至 `src/gameUtils.ts`；测试文件清单（8 个文件 / 38 个用例）：
-  - `gameUtils.test.ts`(5)、`systemPrompt.test.ts`(2)、`evidence.test.ts`(4)、`speechPrompt.test.ts`(11)、`votePrompt.test.ts`(5)、`memory.test.ts`(4)、`nightPrompt.test.ts`(3)、`gmSummary.test.ts`(2)。
+  - `gameUtils.test.ts`(5)、`systemPrompt.test.ts`(3)、`evidence.test.ts`(5)、`speechPrompt.test.ts`(11)、`votePrompt.test.ts`(5)、`memory.test.ts`(4)、`nightPrompt.test.ts`(3)、`gmSummary.test.ts`(2)。
 - 已完成：全量静态验证通过：
   - `npm run check`（tsc --noEmit）通过；
   - `npm test` 8 个文件 / 38 个用例全部通过；
@@ -76,4 +76,5 @@ Original prompt: 我要用openAI-SDK-JS来复刻~/PyProjects/agentRPG/ 目录下
   - 第 2 局：2 天结束，狼人胜；Day1 投票分散度“高”（最高票 4 / 目标数 3）；每日终投改票人数 1/1（均 > 0）；保底发言 6 次（共 12 次发言），投票二次输出违规 1+3 次；
   - 口吻抽查：座位人设区分明显（Seat1 账房、Seat7 戏班、Seat8 烧烤摊等口吻跨局稳定）；跨天一致性良好（能抓住“昨日称记档观望、今日突然转攻击”式翻供并要求解释）。
 - 注意：证据引用校验较严格，模型常因引文标点差异/嵌套《》/漏写引号未命中公共事实而触发纠错重试与保底发言（发言保底率约 40%-50%），对局可正常推进，建议后续放宽引文匹配（如忽略首尾标点、容忍嵌套括号）。
+- TODO：放宽证据引文严格匹配（`extractEvidenceQuotes` 容忍改写/嵌套引号，`validateEvidenceArray` 放宽逐条全命中规则），并在更多对局中复测保底发言率。
 - 注意：两局均狼人获胜（样本量小，仅作记录）。
