@@ -1,4 +1,4 @@
-import { PLAYER_NAMES } from "./gameUtils";
+import { PLAYER_NAMES, extractPrimarySuspicionTarget } from "./gameUtils";
 import type { GameState, Role } from "./game";
 
 export interface PersonaCard {
@@ -162,4 +162,111 @@ export function buildPlayerSystemMessage(playerName: string, state: GameState): 
     .replaceAll("{strategy_handbook}", STRATEGY_HANDBOOKS[role])
     .replaceAll("{vote_tendency}", persona.voteTendency)
     .replaceAll("{night_action}", nightAction);
+}
+
+export interface SpeechTaskContext {
+  playerName: string;
+  role: Role;
+  day: number;
+  alivePlayers: string[];
+  speeches: Record<string, string>;
+  memory: string;
+  accusations: string[];
+  factsText: string;
+  observation: string | null;
+}
+
+export function findAccusationsAgainst(
+  speeches: Record<string, string>,
+  playerName: string,
+  alivePlayers: string[],
+): string[] {
+  const accusations: string[] = [];
+  for (const [speaker, speech] of Object.entries(speeches)) {
+    if (speaker === playerName || speech === "（发言失败）") continue;
+    if (extractPrimarySuspicionTarget(speaker, speech, alivePlayers) === playerName) {
+      accusations.push(`${speaker}：「${speech}」`);
+    }
+  }
+  return accusations;
+}
+
+export function buildSpeechTask(ctx: SpeechTaskContext): string {
+  const parts: string[] = [
+    `现在是第 ${ctx.day} 天白天，轮到你发言。`,
+    `你当前座位：${ctx.playerName}（你就是“我”）`,
+    `你的身份：${ctx.role}`,
+    `当前存活玩家：${ctx.alivePlayers.join(", ")}`,
+    "",
+  ];
+
+  if (ctx.memory) {
+    parts.push(ctx.memory, "");
+  }
+
+  if (Object.keys(ctx.speeches).length) {
+    parts.push("之前的发言记录：");
+    parts.push(JSON.stringify(ctx.speeches, null, 2));
+    parts.push("");
+  }
+
+  if (ctx.accusations.length) {
+    parts.push("## ⚠️ 你被指控了");
+    for (const accusation of ctx.accusations) {
+      parts.push(`今天 ${accusation}`);
+    }
+    parts.push("你必须在发言中正面回应（解释/反驳/反打），不能装作没看见。");
+    parts.push("");
+  }
+
+  parts.push("可核查公共事实（evidence 必须引用其中原文片段）：");
+  parts.push(ctx.factsText);
+  parts.push("");
+
+  if (ctx.observation) {
+    parts.push(`你声明的观察重点：${ctx.observation}`);
+    parts.push("");
+  }
+
+  parts.push("## 发言要求");
+  parts.push("- 长度 <=180 字");
+  parts.push("- 结构：先给结论（怀疑谁/为何观望）→ 给一条《引用》证据 → 回应指控（如有）");
+  parts.push("- 表达方式必须符合你的人设，禁止套用固定句式");
+  if (ctx.day === 1) {
+    parts.push(`- 你可以点名怀疑对象并给理由，或说明暂时观望；若点名，target 不能是你自己（${ctx.playerName}）`);
+  } else {
+    parts.push(`- 必须包含怀疑对象和理由；target 填你怀疑的存活玩家，且不能是你自己（${ctx.playerName}）`);
+  }
+  parts.push("- 禁止出现“我怀疑自己/我觉得自己像狼”这类自我指控");
+  parts.push("- evidence 至少1条，包含《引用片段》且可在公共事实中找到");
+  parts.push("- focus 字段填写你接下来重点观察什么（<=20字）");
+
+  if (ctx.role === "werewolf") {
+    parts.push("", "## 狼人生存提醒");
+    parts.push("- 推理不必太“完美”，全知神探反而惹眼，适度保留盲区");
+    parts.push("- 不要主动指控队友；队友被围攻时质疑指控者的“证据”，而不是硬洗白");
+    parts.push("- 若你被点名，反打指控者中证据最弱的人");
+  }
+
+  return parts.join("\n");
+}
+
+export function buildSpeechRetryTask(
+  baseTask: string,
+  previous: { playerName: string; day: number; target: string; content: string; evidence: string[] },
+): string {
+  return [
+    baseTask,
+    "",
+    "纠错要求：",
+    `- 你就是 ${previous.playerName}，不得怀疑或指控自己`,
+    previous.day > 1
+      ? "- 你必须在 target 字段给出一个不是自己的存活玩家"
+      : "- 你可以观望，但若点名怀疑对象，必须是其他存活玩家",
+    "- 你必须给出至少1条可核查 evidence，并在 evidence 中包含《引用片段》",
+    `- 你上一版 target：${previous.target || "（空）"}`,
+    `- 你上一版发言：${previous.content}`,
+    `- 你上一版 evidence：${JSON.stringify(previous.evidence, null, 2)}`,
+    "请重新输出 JSON。",
+  ].join("\n");
 }

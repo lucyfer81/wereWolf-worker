@@ -25,7 +25,12 @@ import {
   seatNumber,
   sortSeats,
 } from "./gameUtils";
-import { buildPlayerSystemMessage } from "./prompts";
+import {
+  buildPlayerSystemMessage,
+  buildSpeechRetryTask,
+  buildSpeechTask,
+  findAccusationsAgainst,
+} from "./prompts";
 
 export type Role = "werewolf" | "villager";
 type Winner = "werewolves" | "villagers" | "none";
@@ -314,7 +319,22 @@ function validateSpeechOutput(
   return null;
 }
 
-function buildFallbackSpeech(
+const FALLBACK_SPEECH_VARIANTS: Record<"observe" | "day1" | "suspicious", string[]> = {
+  observe: [
+    "现在下结论为时过早，我先把这票攥在手里，听大家的。",
+    "没有实锤之前我不咬人，谁给的理由硬我听谁的。",
+  ],
+  day1: [
+    "第一天信息就这么点，我不急着站队。{target} 的发言我先记下，明天拿票型对一对。",
+    "今天先记档：{target} 说了什么、投了谁，我明天逐条核对。",
+  ],
+  suspicious: [
+    "我盯的是 {target}：发言和票对不上号。今天给个说得通的解释，否则我这票不动。",
+    "{target} 的理由前后对不齐，我暂持怀疑，欢迎你自证。",
+  ],
+};
+
+export function buildFallbackSpeech(
   playerName: string,
   alivePlayers: string[],
   currentDay: number,
@@ -322,23 +342,27 @@ function buildFallbackSpeech(
   const fallbackTarget = chooseFallbackSpeechTarget(playerName, alivePlayers);
 
   if (fallbackTarget === playerName) {
+    const variants = FALLBACK_SPEECH_VARIANTS.observe;
     return {
       target: playerName,
-      content: "目前信息不足，我先保持观望。",
+      content: variants[(seatNumber(playerName) + currentDay) % variants.length],
     };
   }
 
-  if (currentDay === 1) {
-    return {
-      target: fallbackTarget,
-      content: `第一天信息有限，我先观望，但会重点关注 ${fallbackTarget} 后续发言与投票是否一致。`,
-    };
-  }
-
+  const variants = currentDay === 1 ? FALLBACK_SPEECH_VARIANTS.day1 : FALLBACK_SPEECH_VARIANTS.suspicious;
   return {
     target: fallbackTarget,
-    content: `我暂时怀疑 ${fallbackTarget}，其发言与投票逻辑存在跳跃，我会继续观察后续一致性。`,
+    content: variants[(seatNumber(playerName) + currentDay) % variants.length].replaceAll(
+      "{target}",
+      fallbackTarget,
+    ),
   };
+}
+
+export function resolveFocus(response: Record<string, unknown>, content: string): string | null {
+  const focus = asString(response.focus, "").trim();
+  if (focus) return focus.slice(0, 20);
+  return extractObservation(content);
 }
 
 function checkWinCondition(state: GameState): Winner {
@@ -969,46 +993,24 @@ async function runDayPhaseStep(
     }
 
     const speechEvidenceContext = buildVoteEvidenceFacts(state, progress.speeches, recentDeath);
-    const taskParts: string[] = [
-      `现在是第 ${state.currentDay} 天白天。`,
-      `你当前座位：${playerName}（你就是“我”）`,
-      `你的身份：${state.roles[playerName]}`,
-      `当前存活玩家：${aliveSorted.join(", ")}`,
-      "",
-    ];
+    const memory = buildPlayerMemory(state, playerName);
+    const accusations = findAccusationsAgainst(progress.speeches, playerName, aliveSorted);
 
-    if (Object.keys(progress.speeches).length) {
-      taskParts.push("之前的发言记录：");
-      taskParts.push(JSON.stringify(progress.speeches, null, 2));
-      taskParts.push("");
-    }
-
-    if (state.currentDay > 1 && state.playerObservations[playerName]) {
-      taskParts.push(`你观察的重点是：${state.playerObservations[playerName]}`);
-      taskParts.push("");
-    }
-
-    taskParts.push("可核查公共事实（evidence 必须引用其中原文片段）：");
-    taskParts.push(speechEvidenceContext.factsText);
-    taskParts.push("");
-
-    if (state.currentDay === 1) {
-      taskParts.push("请进行你的发言（<=120字）。你可以点名怀疑对象并给理由，或说明暂时观望。");
-      taskParts.push(`如果你点名怀疑对象，target 不能是你自己（${playerName}）。`);
-    } else {
-      taskParts.push("请进行你的发言（<=120字），必须包含怀疑对象和理由。");
-      taskParts.push(`必须在 target 字段填写你怀疑的存活玩家，且 target 不能是你自己（${playerName}）。`);
-    }
-    taskParts.push("禁止出现“我怀疑自己 / 我觉得自己像狼 / 我投自己因为我是狼”这类自我指控。");
-    taskParts.push("你必须填写 evidence 数组，至少1条；每条都要包含《引用片段》且可在公共事实中找到。");
-
-    if (state.roles[playerName] === "werewolf") {
-      taskParts.push("小提示：过于完美的推理可能引起注意，偶尔保持模糊更安全。");
-    }
+    const baseTask = buildSpeechTask({
+      playerName,
+      role: state.roles[playerName],
+      day: state.currentDay,
+      alivePlayers: aliveSorted,
+      speeches: progress.speeches,
+      memory,
+      accusations,
+      factsText: speechEvidenceContext.factsText,
+      observation: state.currentDay > 1 ? state.playerObservations[playerName] : null,
+    });
 
     try {
-      const baseTask = taskParts.join("\n");
       const response = await getPlayerResponse(state, client, model, playerName, baseTask);
+      let lastResponse = response;
       let content = asString(response.content, "（发言失败）").trim() || "（发言失败）";
       let target = asString(response.target, "").trim();
       let evidence = normalizeEvidenceItems(asStringArray(response.evidence));
@@ -1026,21 +1028,15 @@ async function runDayPhaseStep(
 
       if (speechIssue) {
         appendTimeline(state, `⚠️ ${playerName} 发言触发约束（${speechIssue}），请求纠错重试`);
-        const retryTask = [
-          baseTask,
-          "",
-          "纠错要求：",
-          `- 你就是 ${playerName}，不得怀疑或指控自己`,
-          state.currentDay > 1
-            ? "- 你必须在 target 字段给出一个不是自己的存活玩家"
-            : "- 你可以观望，但若点名怀疑对象，必须是其他存活玩家",
-          "- 你必须给出至少1条可核查 evidence，并在 evidence 中包含《引用片段》",
-          `- 你上一版 target：${target || "（空）"}`,
-          `- 你上一版发言：${content}`,
-          `- 你上一版 evidence：${JSON.stringify(evidence, null, 2)}`,
-          "请重新输出 JSON。",
-        ].join("\n");
+        const retryTask = buildSpeechRetryTask(baseTask, {
+          playerName,
+          day: state.currentDay,
+          target,
+          content,
+          evidence,
+        });
         const retry = await getPlayerResponse(state, client, model, playerName, retryTask);
+        lastResponse = retry;
         content = asString(retry.content, "（发言失败）").trim() || "（发言失败）";
         target = asString(retry.target, "").trim();
         evidence = normalizeEvidenceItems(asStringArray(retry.evidence));
@@ -1059,6 +1055,7 @@ async function runDayPhaseStep(
         if (speechIssue) {
           const fallback = buildFallbackSpeech(playerName, aliveSorted, state.currentDay);
           content = fallback.content;
+          target = fallback.target;
           appendTimeline(state, `⚠️ ${playerName} 二次发言仍违规（${speechIssue}），已使用保底发言`);
         } else {
           appendTimeline(state, `✅ ${playerName} 纠错重试成功`);
@@ -1069,7 +1066,7 @@ async function runDayPhaseStep(
       appendTimeline(state, `🗣️ ${playerName}: ${content}`);
       addEvent(state, "speech", playerName, content, "day");
 
-      const observation = extractObservation(content);
+      const observation = resolveFocus(lastResponse, content);
       if (observation) {
         state.playerObservations[playerName] = observation;
       }
